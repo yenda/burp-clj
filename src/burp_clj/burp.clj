@@ -3,111 +3,105 @@
             [clojure.zip :refer [xml-zip]]
             [clojure.data.zip.xml :refer [xml-> xml1-> text attr attr=]]
             [cheshire.core :as json]
-            [base64-clj.core :refer [decode]]))
+            [base64-clj.core :refer [decode]]
+            [clojure.string :as str]))
 
-(def separator (str "\n" (apply str (take 50 (repeat "="))) "\n"))
-
-
-(defn base64?
-  [burp-xml]
-  (let [z      (xml-zip (first burp-xml))]
-    (xml1->  z :request (attr :base64))))
-
+;;;
+;;; MESSAGES
+;;;
 
 (defn beautify-content
   [header content]
-  (if (clojure.string/includes? header "Content-Type: application/json")
+  (if (str/includes? header "Content-Type: application/json")
     (-> content
         json/parse-string
         (json/generate-string {:pretty true}))
     content))
 
-(defn beautify
-  [element]
-  (let [[header content] (clojure.string/split element #"\r\n\r\n")
-        content          (when content (beautify-content header content))]
-    (str header "\r\n\r\n" content)))
-
 (defn keep-begining-and-end
-  [element]
-  (str (apply str (take 4 element))
+  [e]
+  (str (str/join (take 4 e))
        "..."
-       (apply str(take-last 5 element))))
+       (str/join (take-last 5 e))))
 
 (defn remove-cookie-value
   [cookie]
-  (let [[name value] (clojure.string/split cookie #"=")]
+  (let [[name value] (str/split cookie #"=")]
     (str name
          "="
          (keep-begining-and-end value))))
 
-(defn anonymize-request-cookies
-  [element]
-  (let [v (clojure.string/split element #" ")
+(defn anonymize-cookies
+  [cookies]
+  (let [v (str/split cookies #" ")
         header (first v)]
     (->> (drop 1 v) ; drop the header
          (map remove-cookie-value)
-         (clojure.string/join #" ")
+         (str/join #" ")
          (str header " "))))
 
-(defn anonymize-response-cookies
-  [element]
-  (let [v (-> element
-              (clojure.string/split #" ")
-              (update 1 remove-cookie-value))]
-    (clojure.string/join #" " v)))
-
-(defn anonymize-request
-  [request]
-  (clojure.string/replace request #"Cookie:[^\n]*" anonymize-request-cookies))
-
-(defn anonymize-response
-  [response]
-  (clojure.string/replace response #"Set-Cookie:[^\n]*" anonymize-response-cookies))
-
-(defn anonymize-basic-fn
-  [element]
-  (let [v (-> element
-              (clojure.string/split #" ")
-              (update 2 keep-begining-and-end))]
-    (clojure.string/join #" " v)))
+(defn anonymize-set-cookies
+  [set-cookies]
+  (-> set-cookies
+      (str/split #" ")
+      (update 1 remove-cookie-value)
+      (#(str/join #" " %))))
 
 (defn anonymize-basic
-  [element]
-  (clojure.string/replace element #"Authorization: Basic [^\n]*" anonymize-basic-fn))
+  [basic]
+  (let [v (-> basic
+              (str/split #" ")
+              (update 2 keep-begining-and-end))]
+    (str/join #" " v)))
+
+(defn beautify
+  [message]
+  (let [[header content] (str/split message #"\r\n\r\n")
+        content          (when content (beautify-content header content))]
+    (str header "\r\n\r\n" content)))
+
+(defn anonymize
+  [message]
+  (-> message
+      (str/replace #"Cookie:[^\n]*"               anonymize-cookies)
+      (str/replace #"Set-Cookie:[^\n]*"           anonymize-set-cookies)
+      (str/replace #"Authorization: Basic [^\n]*" anonymize-basic)))
+
+(defn transform
+  [message base64]
+  (->> message
+       (#(when base64 (decode %)))
+       anonymize
+       beautify))
+
+;;;
+;;; REQUEST-RESPONSE
+;;;
+
+(defn cleanup-request-response
+  [request-response]
+  (let [{:keys [request response base64]} request-response]
+    {:request  (transform request  base64)
+     :response (transform response base64)}))
 
 (defn request-response->map
   [request-response]
   (let [z      (xml-zip request-response)]
-    {:request  (xml1-> z :request  text)
+    {:base64   (xml1-> z :request (attr :base64))
+     :request  (xml1-> z :request  text)
      :response (xml1-> z :response text)}))
 
-(defn transform-request
-  [base64]
-  (comp beautify
-        anonymize-basic
-        anonymize-request
-        (when base64 decode)))
-
-(defn transform-response
-  [base64]
-  (comp beautify
-        anonymize-basic
-        anonymize-response
-        (when base64 decode)))
-
-(defn transform-request-response
-  [request-response base64]
-  (-> request-response
-      (update :request  (transform-request base64))
-      (update :response (transform-response base64))))
+;;;
+;;; BURP FILE
+;;;
 
 (defn burp-xml->map
   [burp-xml]
-  (let [base64 (base64? burp-xml)]
-    (->> burp-xml
-         (map request-response->map)
-         (map #(transform-request-response % base64)))))
+  (map (comp cleanup-request-response
+             request-response->map)
+       burp-xml))
+
+(def separator (str "\n" (apply str (take 50 (repeat "="))) "\n"))
 
 (defn request-response-map->str
   [request-response-map]
@@ -120,7 +114,7 @@
        burp-xml->map
        (map request-response-map->str)
        (interleave (repeat separator))
-       (apply str)))
+       (str/join)))
 
 (defn parse-burp-xml
   [filename]
