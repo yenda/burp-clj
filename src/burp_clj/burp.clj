@@ -1,10 +1,17 @@
 (ns burp-clj.burp
   (:require [clojure.xml :as c-xml]
-            [clojure.zip :refer [xml-zip]]
-            [clojure.data.zip.xml :refer [xml-> xml1-> text attr attr=]]
+            [clojure.zip :refer [xml-zip node]]
+            [clojure.data.zip.xml :refer [xml-> xml1-> attr attr=]]
+            [clojure.data.zip :as cdz]
             [cheshire.core :as json]
             [base64-clj.core :refer [decode]]
             [clojure.string :as str]))
+
+(defn text
+  "Returns the textual contents of the given location, similar to
+  xpaths's value-of"
+  [loc]
+  (apply str (xml-> loc cdz/descendants node string?)))
 
 ;;;
 ;;; MESSAGES
@@ -70,7 +77,7 @@
 (defn transform
   [message base64]
   (->> message
-       (#(when base64 (decode %)))
+       (#(if base64 (decode %) %))
        anonymize
        beautify))
 
@@ -87,7 +94,7 @@
 (defn request-response->map
   [request-response]
   (let [z      (xml-zip request-response)]
-    {:base64   (xml1-> z :request (attr :base64))
+    {:base64   (Boolean/valueOf (xml1-> z :request (attr :base64)))
      :request  (xml1-> z :request  text)
      :response (xml1-> z :response text)}))
 
