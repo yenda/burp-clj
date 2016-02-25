@@ -63,7 +63,7 @@
 
 (defn beautify
   [message]
-  (let [[header content] (str/split message #"\r\n\r\n")
+  (let [[header content] (str/split message #"\r\n\r\n|\n\n")
         content          (when content (beautify-content header content))]
     (str header "\r\n\r\n" content)))
 
